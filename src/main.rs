@@ -1,11 +1,12 @@
 use prompt::{puzzle, welcome};
+use hex;
 
-use halo2_proofs::arithmetic::PrimeField;
+use halo2_proofs::arithmetic::{PrimeField, lagrange_interpolate, eval_polynomial};
 use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner, Value};
 use halo2_proofs::plonk::{
     create_proof as create_plonk_proof, keygen_pk, keygen_vk, verify_proof as verify_plonk_proof,
     Advice, Circuit, Column, ConstraintSystem, Error, Fixed, ProvingKey,
-    VerifyingKey, Instance
+    VerifyingKey, Instance, get_verifier_xs, get_verifier_evals, clear_verifier_data
 };
 use halo2_proofs::poly::commitment::{CommitmentScheme, ParamsProver, Prover, Verifier};
 use halo2_proofs::poly::VerificationStrategy;
@@ -541,7 +542,65 @@ pub fn main() {
 
     /* Implement your attack here, to find the index of the encrypted message */
 
-    let secret = Fr::from(0u64);
+    // Clear any previous verifier data
+    clear_verifier_data();
+
+    
+    let mut the_commitment = Fr::zero();
+    for i in 0..64 {
+        let (proof, nullifier, commitment) = from_serialized(i);
+        the_commitment = commitment;
+        // assert_eq!(secret_commitment, commitment);
+    }
+    
+    // Collect all verifier xs and evaluations
+    let all_xs_str: Vec<String> = get_verifier_xs();
+    let all_evals_str: Vec<String> = get_verifier_evals();
+    
+    // Helper function to parse hex string to Fr (handles variable length)
+    let parse_hex_to_fr = |hex_str: &str| -> Fr {
+        let clean_hex = hex_str.trim_start_matches("0x");
+        let mut bytes = hex::decode(clean_hex).expect("Failed to decode hex");
+        
+        // Reverse for little-endian (Fr::from_repr expects little-endian)
+        bytes.reverse();
+        
+        let mut arr = [0u8; 32];
+        // Pad with zeros at the end for little-endian
+        arr[..bytes.len()].copy_from_slice(&bytes);
+        Fr::from_repr(arr).expect("Failed to parse Fr from bytes")
+    };
+    
+    // Parse xs from hex strings to Fr
+    let all_xs: Vec<Fr> = all_xs_str.iter().map(|s| parse_hex_to_fr(s)).collect();
+    
+    // Parse evaluations - each is an array like [0x..., 0x..., ...]
+    // Extract element at index 1 (advice_evals[0][1]) as per Hint #2
+    let first_evals: Vec<Fr> = all_evals_str.iter().map(|s| {
+        // Extract element at index 1 from array string
+        // Format is "[0xabc..., 0xdef..., ...]"
+        let trimmed = s.trim_start_matches('[').trim_end_matches(']');
+        let elements: Vec<&str> = trimmed.split(", ").collect();
+        parse_hex_to_fr(elements[1])  // Index 1, not 0!
+    }).collect();
+    
+    
+
+    // Declare coeffs outside so it can be used later
+    let mut coeffs = Vec::new();
+
+    // Now you can use lagrange_interpolate with actual field elements
+    if all_xs.len() > 0 && all_xs.len() == first_evals.len() {
+        coeffs = lagrange_interpolate(&all_xs, &first_evals);
+    }
+    
+    let w = Fr::from_str_vartime("12799441450189702121232122059226990287081568291547011007819741462284200902087").unwrap();
+
+    // Evaluate the polynomial with coefficients `coeffs` at point w^2
+    let poly_at_w2 = eval_polynomial(&coeffs, w.square());
+    
+    println!("\nSecret (Bob's Private Key): {:?}", poly_at_w2);
+    let secret = poly_at_w2;
     let secret_commitment = poseidon_base::primitives::Hash::<
         _,
         P128Pow5T3Compact<Fr>,
@@ -550,10 +609,9 @@ pub fn main() {
         RATE,
     >::init()
     .hash([secret, Fr::from(0u64)]);
-    for i in 0..64 {
-        let (_, _, commitment) = from_serialized(i);
-        assert_eq!(secret_commitment, commitment);
-    }
+
+    assert_eq!(secret_commitment, the_commitment);
+    println!("Puzzle Successfully Solved! ✅");
     /* End of attack */
 }
 

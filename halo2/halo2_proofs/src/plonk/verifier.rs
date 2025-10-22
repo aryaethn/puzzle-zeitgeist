@@ -1,6 +1,7 @@
 use ff::{Field, FromUniformBytes, WithSmallOrderMulGroup};
 use group::Curve;
 use std::iter;
+use std::sync::Mutex;
 
 use super::{
     vanishing, ChallengeBeta, ChallengeGamma, ChallengeTheta, ChallengeX, ChallengeY, Error,
@@ -14,6 +15,23 @@ use crate::poly::{
     VerifierQuery,
 };
 use crate::transcript::{read_n_scalars, EncodedChallenge, TranscriptRead};
+
+// Global storage for verifier data
+static VERIFIER_XS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static VERIFIER_EVALS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+pub fn get_verifier_xs() -> Vec<String> {
+    VERIFIER_XS.lock().unwrap().clone()
+}
+
+pub fn get_verifier_evals() -> Vec<String> {
+    VERIFIER_EVALS.lock().unwrap().clone()
+}
+
+pub fn clear_verifier_data() {
+    VERIFIER_XS.lock().unwrap().clear();
+    VERIFIER_EVALS.lock().unwrap().clear();
+}
 
 #[cfg(feature = "batch")]
 mod batch;
@@ -429,6 +447,13 @@ where
 
     // We are now convinced the circuit is satisfied so long as the
     // polynomial commitments open to the correct values.
+
+    // println!("verifier x: {:?}", *x);
+    // println!("verifier evaluations: {:?}", advice_evals[0]);
+    
+    // Store values in global vectors
+    VERIFIER_XS.lock().unwrap().push(format!("{:?}", *x));
+    VERIFIER_EVALS.lock().unwrap().push(format!("{:?}", advice_evals[0]));
 
     let verifier = V::new(params);
     strategy.process(|msm| {
